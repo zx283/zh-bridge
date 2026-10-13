@@ -1,0 +1,20 @@
+{
+  "name": "zh-bridge",
+  "displayName": "zh-bridge (中文 ⇄ English)",
+  "version": "0.3.0",
+  "description": "Type in Chinese, read replies in Chinese, while Claude only ever sees English. A local proxy translates with a cheap model (DeepSeek or any OpenAI-compatible API).",
+  "author": {
+    "name": "Zhiqiu Xia",
+    "url": "https://github.com/zx283"
+  },
+  "license": "MIT",
+  "keywords": [
+    "translation",
+    "chinese",
+    "i18n",
+    "deepseek"
+  ],
+  "types": "./types/index.d.ts",
+  "homepage": "https://github.com/zx283/zh-bridge",
+  "repository": "https://github.com/zx283/zh-bridge"
+}

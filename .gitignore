@@ -1,0 +1,19 @@
+# dependencies installed only to run the tests
+node_modules/
+test/package.json
+test/package-lock.json
+
+# Claude Code writes these next to a plugin it loads for development
+.claude-plugin/types/
+zh-bridge/.claude-plugin/types/
+zh-bridge/tsconfig.json
+
+# OS / editor clutter
+.DS_Store
+*.log
+
+# never commit your own settings or translations
+.zh-bridge/
+config.json
+history.json
+cache.jsonl

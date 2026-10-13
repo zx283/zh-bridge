@@ -1,0 +1,17 @@
+{
+  "name": "zh-bridge",
+  "owner": {
+    "name": "Zhiqiu Xia",
+    "url": "https://github.com/zx283"
+  },
+  "plugins": [
+    {
+      "name": "zh-bridge",
+      "source": "./zh-bridge",
+      "description": "Chinese ⇄ English translation layer for Claude Code"
+    }
+  ],
+  "metadata": {
+    "description": "Chinese ⇄ English translation for Claude Code"
+  }
+}

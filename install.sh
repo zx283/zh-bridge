@@ -61,7 +61,7 @@ if [ "$(uname)" = "Darwin" ]; then
   <key>ProgramArguments</key><array><string>$NODE</string><string>$ZH_HOME/app/proxy.mjs</string></array>
   <key>EnvironmentVariables</key><dict><key>ZH_BRIDGE_HOME</key><string>$ZH_HOME</string></dict>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>StandardOutPath</key><string>$ZH_HOME/proxy.log</string>
   <key>StandardErrorPath</key><string>$ZH_HOME/proxy.log</string>
 </dict></plist>

@@ -11,7 +11,7 @@ export type ZhSettings = {
   prompt_output: 'default' | 'custom'
 }
 
-export type ZhHealth = 'unknown' | 'running' | 'down'
+export type ZhHealth = 'unknown' | 'running' | 'outdated' | 'down'
 
 export type ZhField = 'model' | 'base_url' | 'api_key'
 

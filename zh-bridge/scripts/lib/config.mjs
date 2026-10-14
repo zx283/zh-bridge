@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+// Must match .claude-plugin/plugin.json: the plugin restarts an older running proxy.
+export const VERSION = '0.4.0';
+
 export const HOME_DIR = process.env.ZH_BRIDGE_HOME || path.join(os.homedir(), '.zh-bridge');
 export const CONFIG_PATH = path.join(HOME_DIR, 'config.json');
 export const CACHE_PATH = path.join(HOME_DIR, 'cache.jsonl');

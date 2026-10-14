@@ -4,10 +4,11 @@ const SURFACES = ['terminal', 'desktop'] as const
 const CONFIG = '/h/.zh-bridge/config.json'
 
 // A fake disk + a fake proxy beneath the plugin.
-function fakeHost(on: any, files: Record<string, string>, proxyUp = true) {
+function fakeHost(on: any, files: Record<string, string>, proxyUp: boolean | 'old' = true) {
   mock.env(on, { HOME: '/h' })
   on('fs.read', async (_$: any, e: any) => {
     if (e.path.endsWith('/scripts/lib/prompts/input.txt') && !(e.path in files)) return { value: 'DEFAULT INPUT PROMPT' }
+    if (e.path.endsWith('/.claude-plugin/plugin.json') && !(e.path in files)) return { value: '{"version":"0.4.0"}' }
     if (!(e.path in files)) return { deny: 'ENOENT' }
     return { value: files[e.path] }
   })
@@ -19,11 +20,14 @@ function fakeHost(on: any, files: Record<string, string>, proxyUp = true) {
   on('process.run', async (_$: any, e: any) => {
     if (e.argv[0] !== 'curl' || !proxyUp) return { value: { exitCode: 7, stdout: '', stderr: '' } }
     if (e.argv.some((a: string) => a.includes('/__zh/lookup'))) {
+      // an older proxy doesn't know /__zh/lookup and passes it on to Anthropic
+      if (proxyUp === 'old') return { value: { exitCode: 0, stdout: '{}', stderr: '' } }
       const q = JSON.parse(e.init?.stdin ?? '{}')
       const look = (list: string[]) => (list ?? []).map(t => CACHE[t] ?? null)
       return { value: { exitCode: 0, stdout: JSON.stringify({ in: look(q.in), out: look(q.out) }), stderr: '' } }
     }
-    return { value: { exitCode: 0, stdout: '{"ok":true}', stderr: '' } }
+    const version = proxyUp === 'old' ? '' : ',"version":"0.4.0"'
+    return { value: { exitCode: 0, stdout: `{"ok":true${version}}`, stderr: '' } }
   })
   on('fs.exists', async (_$: any, e: any) => ({ value: e.path in files }))
   on('command.register', async () => ({ value: { command: 'zh' } }))
@@ -155,12 +159,31 @@ for (const surface of SURFACES) {
   })
 }
 
-test('/zh show with nothing in this conversation, /zh off and /zh status answer as text', async ($, on) => {
+test('an older running proxy is reported, not shown as "no translations"', async ($, on) => {
+  const files: Record<string, string> = { [CONFIG]: '{}' }
+  fakeHost(on, files, 'old')
+  on('session.messages', async () => ({ value: CONVERSATION }))
+  const shown = await $.command.run({ command: 'zh', args: 'show' })
+  expect(shown.text).toContain("Couldn't read this conversation's translations")
+  expect(shown.text).toContain('older version')
+  const st = await $.command.run({ command: 'zh', args: 'status' })
+  expect(st.text).toContain('older version')
+})
+
+test('/zh show in a conversation with nothing translated', async ($, on) => {
+  const files: Record<string, string> = { [CONFIG]: '{}' }
+  fakeHost(on, files)
+  on('session.messages', async () => ({ value: [{ role: 'user', content: [text('只在别的会话里出现')] }] }))
+  const shown = await $.command.run({ command: 'zh', args: 'show' })
+  expect(shown.text).toContain('No translations in this conversation yet')
+})
+
+test('/zh show with the proxy down, /zh off and /zh status answer as text', async ($, on) => {
   const files: Record<string, string> = { [CONFIG]: '{}' }
   fakeHost(on, files, false)
   on('session.messages', async () => ({ value: [{ role: 'user', content: [text('你好')] }] }))
   const shown = await $.command.run({ command: 'zh', args: 'show' })
-  expect(shown.text).toContain('No translations in this conversation yet')
+  expect(shown.text).toContain("isn't answering") // the proxy is down here
   const off = await $.command.run({ command: 'zh', args: 'off' })
   expect(off.text).toContain('off')
   expect(cfg(files).enabled).toBe(false)

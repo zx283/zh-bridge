@@ -200,6 +200,12 @@ assert.deepEqual(lk.in, ['Please help me fix this function `foo_bar()`，thanks'
 assert.deepEqual(lk.out, ['Done. I fixed `foo_bar()` in a.py.']);
 assert.equal(fs.existsSync(path.join(home, 'history.json')), false, 'no shared history file any more');
 console.log('ok  7  /__zh/lookup returns both sides of each translation; no history.json');
+
+// ---- the running proxy reports its version, which must match the plugin's
+const health = await fetch(`http://127.0.0.1:${P.proxy}/__zh/health`).then((r) => r.json());
+const pluginVersion = JSON.parse(fs.readFileSync(path.join(here, '../zh-bridge/.claude-plugin/plugin.json'), 'utf8')).version;
+assert.equal(health.version, pluginVersion, 'scripts/lib/config.mjs VERSION must equal plugin.json version');
+console.log('ok 11  proxy version ' + health.version + ' matches plugin.json');
 proxy.kill();
 console.log('\nALL TESTS PASSED');
 process.exit(0);

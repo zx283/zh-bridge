@@ -129,13 +129,25 @@ function toSettings(raw: Raw): ZhSettings {
   }
 }
 
+// The plugin's own version; the proxy reports its version in /__zh/health.
+async function pluginVersion($: EngineInterface): Promise<string> {
+  try {
+    return JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)).version ?? ''
+  } catch {
+    return ''
+  }
+}
+
+const OUTDATED = 'the translation service is an older version: restart Claude Code to update it, or run ./install.sh again'
+
 async function refresh($: EngineInterface): Promise<ZhSettings> {
   const s = toSettings(await readRaw($))
   await update($, settings, () => s)
   let state: ZhHealth = 'down'
   try {
     const r = await $.process.run(['curl', '-s', '-m', '1', `http://127.0.0.1:${s.port}/__zh/health`], { timeoutMs: 3000 })
-    if (r.exitCode === 0 && r.stdout.includes('"ok":true')) state = 'running'
+    const h = r.exitCode === 0 ? JSON.parse(r.stdout) : null
+    if (h?.ok) state = h.version === (await pluginVersion($)) ? 'running' : 'outdated'
   } catch {
     state = 'unknown'
   }
@@ -293,7 +305,8 @@ type Turn = { shown: string; keys: string[]; reply: string[] }
 const blockText = (b: { type: string; [k: string]: unknown }): string | null =>
   b.type === 'text' && typeof b.text === 'string' && b.text.trim() ? b.text : null
 
-async function lookup($: EngineInterface, port: number, q: { in: string[]; out: string[] }): Promise<{ in: (string | null)[]; out: (string | null)[] }> {
+// null when the proxy couldn't answer (not running, or an older version without /__zh/lookup)
+async function lookup($: EngineInterface, port: number, q: { in: string[]; out: string[] }): Promise<{ in: (string | null)[]; out: (string | null)[] } | null> {
   const none = { in: q.in.map(() => null), out: q.out.map(() => null) }
   if (!q.in.length && !q.out.length) return none
   try {
@@ -302,13 +315,14 @@ async function lookup($: EngineInterface, port: number, q: { in: string[]; out: 
       { stdin: JSON.stringify(q), timeoutMs: 8000 },
     )
     const j = JSON.parse(r.stdout)
-    return { in: Array.isArray(j.in) ? j.in : none.in, out: Array.isArray(j.out) ? j.out : none.out }
+    if (!Array.isArray(j.in) || !Array.isArray(j.out)) return null
+    return { in: j.in, out: j.out }
   } catch {
-    return none
+    return null
   }
 }
 
-async function sessionTranslations($: EngineInterface): Promise<ZhEntry[]> {
+async function sessionTranslations($: EngineInterface): Promise<ZhEntry[] | null> {
   const messages = await $.session.messages({ as: 'api' })
   const turns: Turn[] = []
   for (const m of messages) {
@@ -332,6 +346,7 @@ async function sessionTranslations($: EngineInterface): Promise<ZhEntry[]> {
   const ins = turns.flatMap(t => t.keys)
   const outs = turns.flatMap(t => t.reply.filter(r => CJK.test(r)))
   const found = await lookup($, port, { in: ins, out: outs })
+  if (!found) return null
   const enIn = new Map(ins.map((t, i) => [t, found.in[i]]))
   const enOut = new Map(outs.map((t, i) => [t, found.out[i]]))
 
@@ -351,7 +366,7 @@ async function sessionTranslations($: EngineInterface): Promise<ZhEntry[]> {
 function statusText(s: ZhSettings, proxy: ZhHealth): string {
   const onOff = (b: boolean) => (b ? 'on' : 'off')
   return [
-    `zh-bridge  ${proxy === 'running' ? `● proxy running on 127.0.0.1:${s.port}` : '○ proxy NOT running'}`,
+    `zh-bridge  ${proxy === 'running' ? `● proxy running on 127.0.0.1:${s.port}` : proxy === 'outdated' ? `○ ${OUTDATED}` : '○ proxy NOT running'}`,
     `  ${pad('Translation')}${onOff(s.enabled)}`,
     `  ${pad('Translate my input')}${onOff(s.input)}`,
     `  ${pad('Translate output')}${OUTPUT_LABEL[s.output]}`,
@@ -389,7 +404,9 @@ type Els = ReturnType<EngineInterface['ui']['resolve']>
 // The settings list: the same rows in the band and in the pane.
 function drawSettings($: EngineInterface, els: Els, s: ZhSettings, proxy: ZhHealth, note: string | null, inPane: boolean, close: () => void) {
   const { Box, Text, Button } = els
-  const proxyText = proxy === 'running' ? '● proxy running' : '○ proxy not running: restart Claude Code or run install.sh'
+  const proxyText = proxy === 'running' ? '● proxy running'
+    : proxy === 'outdated' ? `○ ${OUTDATED}`
+    : '○ proxy not running: restart Claude Code or run install.sh'
 
   const picker = (row: RowKey) => {
     if (!('Select' in els)) return <Text>{valueText(s, row)}</Text>
@@ -530,6 +547,12 @@ export const register: Register = on => {
     const isFullscreen = e.presentation?.isFullscreen !== false
     if (arg === 'show') {
       const h = await sessionTranslations($)
+      if (h === null) {
+        const s = await refresh($)
+        const why = (await read($, health)) === 'outdated' ? OUTDATED
+          : `the translation service isn't answering on 127.0.0.1:${s.port}: restart Claude Code, or run ./install.sh again`
+        return { text: `Couldn't read this conversation's translations: ${why}.` }
+      }
       if (!h.length) {
         return { text: 'No translations in this conversation yet. Write a message in Chinese, then run /zh show.' }
       }

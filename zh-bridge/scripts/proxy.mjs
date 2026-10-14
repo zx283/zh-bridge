@@ -15,7 +15,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
-import { loadConfig, HOME_DIR, LOG_PATH, TYPED_PATH } from './lib/config.mjs';
+import { loadConfig, HOME_DIR, LOG_PATH, TYPED_PATH, VERSION } from './lib/config.mjs';
 import { translate, hasCJK, cjkRatio, keyOf, cacheGet, cacheSet } from './lib/translator.mjs';
 
 fs.mkdirSync(HOME_DIR, { recursive: true });
@@ -366,7 +366,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url.startsWith('/__zh/health')) {
       const cfg = loadConfig();
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, pid: process.pid, enabled: cfg.enabled, input: cfg.input, output: cfg.output, model: cfg.translator.model, key: !!cfg.translator.api_key }));
+      res.end(JSON.stringify({ ok: true, version: VERSION, pid: process.pid, enabled: cfg.enabled, input: cfg.input, output: cfg.output, model: cfg.translator.model, key: !!cfg.translator.api_key }));
       return;
     }
     const body = await readBody(req);

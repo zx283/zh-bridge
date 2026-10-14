@@ -50,6 +50,8 @@ for (const surface of SURFACES) {
     expect(await ui.find({ text: /secret/ })).toBeUndefined() // key never shown in full
 
     // number keys (row buttons) change a row straight away
+    await ui.press({ key: 'n-output' }) // On → Always → Off → On
+    expect(cfg(files).output).toBe('always')
     await ui.press({ key: 'n-output' })
     expect(cfg(files).output).toBe('off')
     await ui.press({ key: 'n-output' })
@@ -63,6 +65,8 @@ for (const surface of SURFACES) {
     const pick = (key: string, value: string) => $.ui.select({ plugin: 'zh-bridge', key, value, surface })
     await pick('input', 'off')
     expect(cfg(files).input).toBe(false)
+    await pick('output', 'always')
+    expect(cfg(files).output).toBe('always')
     await pick('lang', 'Japanese')
     expect(cfg(files).target_lang).toBe('Japanese')
 
@@ -72,15 +76,17 @@ for (const surface of SURFACES) {
   })
 }
 
-test('sending a message closes the list', async ($, on) => {
+test('sending a message closes the list and is remembered as typed', async ($, on) => {
   const files: Record<string, string> = { [CONFIG]: '{}' }
   fakeHost(on, files)
   on('prompt.submit', async (_$: any, e: any) => ({ text: e.text }))
   const ui = await mountBand($, 'terminal')
   await $.command.run({ command: 'zh', args: '' })
   expect(await ui.findAll({ type: 'Select' })).toHaveLength(9)
-  await $.prompt.submit({ text: 'hello' } as any).catch(() => undefined)
+  await $.prompt.submit({ text: 'hello', origin: { kind: 'composer' } } as any).catch(() => undefined)
   expect(await ui.findAll({ type: 'Select' })).toHaveLength(0)
+  // typed prompts are remembered for "Always"
+  expect(JSON.parse(files['/h/.zh-bridge/typed.json'] ?? '[]')).toContain('hello')
 })
 
 test('missing key is flagged', async ($, on) => {

@@ -15,7 +15,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
-import { loadConfig, HOME_DIR, HISTORY_PATH, LOG_PATH } from './lib/config.mjs';
+import { loadConfig, HOME_DIR, HISTORY_PATH, LOG_PATH, TYPED_PATH } from './lib/config.mjs';
 import { translate, hasCJK, cjkRatio, keyOf, cacheGet, cacheSet } from './lib/translator.mjs';
 
 fs.mkdirSync(HOME_DIR, { recursive: true });
@@ -99,11 +99,37 @@ function latestHumanPrompt(messages) {
 // that text pasted in. Only the person's text needs translating.
 const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
 
+// The prompts the person typed recently, as the plugin records them (typed.json).
+// "Always" translates a reply only when it answers one of these, so Claude Code's
+// own requests (compacting, prompt suggestions) are never translated.
+function readTyped() {
+  try {
+    const t = JSON.parse(fs.readFileSync(TYPED_PATH, 'utf8'));
+    return Array.isArray(t) ? t.filter((x) => typeof x === 'string' && x.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+const isTypedByPerson = (prompt) => {
+  if (!prompt) return false;
+  const p = prompt.trim();
+  return readTyped().some((t) => p.includes(t.trim()));
+};
+
+// A helper agent (subagent) Claude started: its reply goes back to Claude, never translate it.
+function isSubagent(payload) {
+  const sys = typeof payload.system === 'string' ? payload.system
+    : Array.isArray(payload.system) ? payload.system.map((b) => b?.text || '').join('\n') : '';
+  return /You are an agent for Claude Code|built on Anthropic's Claude Agent SDK/.test(sys);
+}
+
 async function rewriteRequest(payload, cfg) {
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   // Decide output translation from the ORIGINAL prompt, before we translate it.
   const latest = latestHumanPrompt(messages);
   const latestIsChinese = !!latest && hasCJK(latest);
+  const latestIsTyped = latestIsChinese || isTypedByPerson(latest);
   let changed = false;
   const jobs = [];
 
@@ -166,7 +192,7 @@ async function rewriteRequest(payload, cfg) {
     }
   }
   await Promise.all(jobs);
-  return { changed, latestIsChinese };
+  return { changed, latestIsChinese, latestIsTyped };
 }
 
 // ---------------------------------------------------------------- upstream
@@ -374,9 +400,11 @@ const server = http.createServer(async (req, res) => {
     const isConversation = Array.isArray(payload.tools) && payload.tools.length > 0;
     if (!isConversation) return forwardRaw(req, res, body, cfg);
 
-    const { changed, latestIsChinese } = await rewriteRequest(payload, cfg);
+    const { changed, latestIsChinese, latestIsTyped } = await rewriteRequest(payload, cfg);
     const outBody = changed ? Buffer.from(JSON.stringify(payload)) : body;
-    const wantOut = isMessages && cfg.output === 'auto' && latestIsChinese;
+    const wantOut = isMessages && !isSubagent(payload) && (
+      (cfg.output === 'auto' && latestIsChinese) ||
+      (cfg.output === 'always' && latestIsTyped));
     if (!wantOut) return forwardRaw(req, res, outBody, cfg);
     return forwardTranslated(req, res, outBody, cfg, payload.stream === true);
   } catch (e) {

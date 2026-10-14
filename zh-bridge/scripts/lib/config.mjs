@@ -7,12 +7,13 @@ export const HOME_DIR = process.env.ZH_BRIDGE_HOME || path.join(os.homedir(), '.
 export const CONFIG_PATH = path.join(HOME_DIR, 'config.json');
 export const CACHE_PATH = path.join(HOME_DIR, 'cache.jsonl');
 export const HISTORY_PATH = path.join(HOME_DIR, 'history.json'); // last 50 translations, newest last
+export const TYPED_PATH = path.join(HOME_DIR, 'typed.json');     // what the person last typed (written by /zh's plugin)
 export const LOG_PATH = path.join(HOME_DIR, 'proxy.log');
 
 export const DEFAULTS = {
   enabled: true,              // master switch; false = pure passthrough
   input: true,                // translate Chinese prompts -> English before Claude sees them
-  output: 'auto',             // 'auto' = translate final reply when your latest prompt was Chinese; 'off'
+  output: 'auto',             // 'auto': translate the final reply when you wrote Chinese · 'always' · 'off'
   target_lang: 'Simplified Chinese',
   port: 8787,
   upstream: 'https://api.anthropic.com',

@@ -16,4 +16,5 @@ zh-bridge/tsconfig.json
 .zh-bridge/
 config.json
 history.json
+typed.json
 cache.jsonl

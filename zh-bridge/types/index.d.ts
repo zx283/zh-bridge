@@ -1,7 +1,7 @@
 export type ZhSettings = {
   enabled: boolean
   input: boolean
-  output: boolean
+  output: 'auto' | 'always' | 'off'
   target_lang: string
   port: number
   model: string

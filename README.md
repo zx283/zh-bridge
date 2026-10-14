@@ -14,7 +14,7 @@ you (中文) ◄── Claude Code ◄── [proxy: English → 中文] ◄─�
 - **Your prompt:** any prompt containing Chinese is translated to English before Claude sees it. Code, `inline code`, paths, URLs and Claude Code's `[Image #1]` / `[Pasted text]` markers are masked, so the translator can't touch them. Ambiguous terms keep the original in brackets: `gradient checkpointing (梯度检查点)`.
 - **Claude's reply:** only the final reply of a turn is translated. Tool calls and intermediate steps pass through unchanged. Technical terms keep their English: `依赖注入（dependency injection）`.
 - **Claude's context stays English:** on the next turn the Chinese reply is swapped back to Claude's original English. Translations are cached, so the history is identical every turn and prompt caching keeps working.
-- **Automatic:** replies are translated only when your prompt had Chinese in it. Write English and you get English.
+- **Automatic by default:** replies are translated when your prompt had Chinese in it, so English in gets English out. Set "Translate output" to **Always** to get every reply in your language, whatever you typed.
 - **Fails open:** if the translator is down or returns something broken, the original text goes through. Nothing is blocked.
 - **Claude Code's own background requests** (session titles, summaries) are never touched.
 
@@ -70,7 +70,7 @@ How it opens depends on Claude Code's layout (switch with `/tui`):
 - **`/tui fullscreen`:** a plugin can't move the keyboard into the list here. Press a number to change a row, 0 to close, or Ctrl+X Tab first to use Tab / ↑↓ / Enter. Sending a message also closes it.
 
 Rows:
-- **1–4** switch translation on/off, set each direction, and pick the reply language (简体中文, 繁體中文, 日本語, 한국어).
+- **1–4** switch translation on/off, set each direction, and pick the reply language (简体中文, 繁體中文, 日本語, 한국어). "Translate output" has three choices: **On (when I write Chinese)**, **Always** (every reply to something you typed, even in English), and **Off**.
 - **5–7** open Claude Code's question dialog: pick a preset, or type your own under "Type something". The key is only ever shown masked.
 - **8–9** switch between the default prompt and your own. "Custom" copies the default to `~/.zh-bridge/prompts/input.txt` (or `output.txt`) and opens it in your text editor; save it and it's used from your next message. In the output prompt, `{lang}` stands for the reply language. A fixed rule protecting code and placeholders is always added.
 
@@ -105,11 +105,11 @@ Everything `/zh` changes lives in `~/.zh-bridge/config.json`:
 }
 ```
 
-Any OpenAI-compatible endpoint works: Qwen (DashScope), Kimi, OpenRouter, or a local Ollama (`http://127.0.0.1:11434/v1`). Edits apply immediately.
+`"output"` is `"auto"` (translate when you write Chinese), `"always"` or `"off"`. Any OpenAI-compatible endpoint works: Qwen (DashScope), Kimi, OpenRouter, or a local Ollama (`http://127.0.0.1:11434/v1`). Edits apply immediately.
 
 ## Good to know
 
-- **Privacy:** your prompts and Claude's final replies are sent to the translation provider you configure. Your API key, translation history (`history.json`, last 50), cache and log stay in `~/.zh-bridge` on your machine.
+- **Privacy:** your prompts and Claude's final replies are sent to the translation provider you configure. Your API key, translation history (`history.json`, last 50), your last 30 typed prompts (`typed.json`, used by "Always"), cache and log stay in `~/.zh-bridge` on your machine.
 - **The final reply doesn't stream.** It has to be complete before it can be translated, so it appears all at once, about 1–3 seconds after Claude finishes. Long replies are translated in parallel chunks.
 - **Commands with text after them** (`/btw …`, `/loop …`, your own skills) work: only the words you typed are translated, never the command's own instructions. Each scheduled `/loop` run replies in the language you were writing in.
 - **Auto mode:** because requests go through a local proxy, Claude Code bills auto mode's safety-check requests the old way and shows a notice about it once. Everything still works.

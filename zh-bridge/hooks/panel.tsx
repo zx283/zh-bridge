@@ -65,6 +65,12 @@ const PRESETS: Record<ZhField, string[]> = {
 // Bumped after a dialog so the "Change…" pickers snap back to the current value.
 let editNonce = 0
 
+const OUTPUT_LABEL: Record<ZhSettings['output'], string> = {
+  auto: 'On (when I write Chinese)',
+  always: 'Always',
+  off: 'Off',
+}
+
 const ON_OFF = [
   { value: 'on', label: 'On' },
   { value: 'off', label: 'Off' },
@@ -112,7 +118,7 @@ function toSettings(raw: Raw): ZhSettings {
   return {
     enabled: raw.enabled !== false,
     input: raw.input !== false,
-    output: raw.output !== 'off',
+    output: raw.output === 'off' ? 'off' : raw.output === 'always' ? 'always' : 'auto',
     target_lang: typeof raw.target_lang === 'string' ? raw.target_lang : 'Simplified Chinese',
     port: typeof raw.port === 'number' ? raw.port : 8787,
     model: raw.translator?.model ?? 'deepseek-chat',
@@ -210,7 +216,7 @@ async function quick($: EngineInterface, row: RowKey): Promise<void> {
   switch (row) {
     case 'enabled': return save($, { enabled: !s.enabled })
     case 'input': return save($, { input: !s.input })
-    case 'output': return save($, { output: s.output ? 'off' : 'auto' })
+    case 'output': return save($, { output: s.output === 'auto' ? 'always' : s.output === 'always' ? 'off' : 'auto' })
     case 'lang': {
       const i = Math.max(0, LANGS.indexOf(s.target_lang))
       return save($, { target_lang: LANGS[(i + 1) % LANGS.length] })
@@ -225,7 +231,7 @@ function valueText(s: ZhSettings, row: RowKey): string {
   switch (row) {
     case 'enabled': return s.enabled ? 'On' : 'Off'
     case 'input': return s.input ? 'On' : 'Off'
-    case 'output': return s.output ? 'On' : 'Off'
+    case 'output': return OUTPUT_LABEL[s.output]
     case 'lang': return LANG_LABEL[s.target_lang] ?? s.target_lang
     case 'model': return s.model
     case 'base_url': return s.base_url
@@ -293,7 +299,7 @@ function statusText(s: ZhSettings, proxy: ZhHealth): string {
     `zh-bridge  ${proxy === 'running' ? `● proxy running on 127.0.0.1:${s.port}` : '○ proxy NOT running'}`,
     `  ${pad('Translation')}${onOff(s.enabled)}`,
     `  ${pad('Translate my input')}${onOff(s.input)}`,
-    `  ${pad('Translate output')}${onOff(s.output)}`,
+    `  ${pad('Translate output')}${OUTPUT_LABEL[s.output]}`,
     `  ${pad('Reply language')}${LANG_LABEL[s.target_lang] ?? s.target_lang}`,
     `  ${pad('Model')}${s.model}`,
     `  ${pad('API URL')}${s.base_url}`,
@@ -301,6 +307,24 @@ function statusText(s: ZhSettings, proxy: ZhHealth): string {
     `  ${pad('Input prompt')}${s.prompt_input}`,
     `  ${pad('Output prompt')}${s.prompt_output}`,
   ].join('\n')
+}
+
+// ---------------------------------------------------------------- typed prompts
+
+// The proxy's "Always" mode translates a reply only when it answers something
+// the person typed. Claude Code tells the plugin where each prompt came from,
+// so remember the last few typed ones in ~/.zh-bridge/typed.json.
+async function rememberTyped($: EngineInterface, text: string): Promise<void> {
+  const t = text.trim()
+  if (!t) return
+  const file = `${await zhHome($)}/typed.json`
+  let list: string[] = []
+  try {
+    const old = JSON.parse(await $.fs.read(file))
+    if (Array.isArray(old)) list = old.filter((x): x is string => typeof x === 'string')
+  } catch { /* first time */ }
+  list = [...list.filter(x => x !== t), t].slice(-30)
+  await $.fs.write(file, JSON.stringify(list)).catch(() => undefined)
 }
 
 // ---------------------------------------------------------------- drawing
@@ -322,7 +346,12 @@ function drawSettings($: EngineInterface, els: Els, s: ZhSettings, proxy: ZhHeal
     switch (row) {
       case 'enabled': return onOff(s.enabled, isOn => save($, { enabled: isOn }))
       case 'input': return onOff(s.input, isOn => save($, { input: isOn }))
-      case 'output': return onOff(s.output, isOn => save($, { output: isOn ? 'auto' : 'off' }))
+      case 'output':
+        return (
+          <Select key={row} value={s.output}
+            options={(['auto', 'always', 'off'] as const).map(v => ({ value: v, label: OUTPUT_LABEL[v] }))}
+            onSelect={(v: string) => void save($, { output: v })} />
+        )
       case 'lang': {
         const langs = LANGS.includes(s.target_lang) ? LANGS : [...LANGS, s.target_lang]
         return (
@@ -482,9 +511,19 @@ export const register: Register = on => {
     return {}
   })
 
-  // Sending a message closes whatever /zh shows in the band.
+  // Sending a message closes whatever /zh shows in the band, and is remembered
+  // as typed by the person (for "Always").
   on('prompt.submit', async ($, e, next) => {
     if ((await read($, view)) !== 'none') await update($, view, () => 'none')
+    if (e.origin.kind === 'composer' || e.origin.kind === 'bridge') await rememberTyped($, e.text)
+    return next(e)
+  })
+
+  // The text after a command (/btw …, /loop …, a skill) is typed by the person too.
+  on('command.run', async ($, e, next) => {
+    if ((e.origin.kind === 'composer' || e.origin.kind === 'bridge') && e.command !== 'zh' && e.args.trim()) {
+      await rememberTyped($, e.args)
+    }
     return next(e)
   })
 

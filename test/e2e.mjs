@@ -172,6 +172,28 @@ msg = await client.messages.stream({ model: 'x', max_tokens: 100, tools, message
 assert.equal(msg.content[0].text.startsWith('完成。'), true, 'scheduled run reply translated');
 console.log('ok  9  scheduled /loop run: reply translated like the conversation');
 
+// ---- "Always": replies to what the person typed are translated, even in English;
+//      Claude Code's own requests (compacting) and helper agents never are.
+fs.writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgPath, 'utf8')), output: 'always' }));
+fs.writeFileSync(path.join(home, 'typed.json'), JSON.stringify(['what files are here?']));
+nextResponse = sseMsg([{ type: 'text', text: 'Done.' }], 'end_turn');
+msg = await client.messages.stream({ model: 'x', max_tokens: 100, tools, messages: [{ role: 'user', content: 'what files are here?' }] }).finalMessage();
+assert.equal(msg.content[0].text, '完成。', 'typed English prompt: reply translated');
+nextResponse = sseMsg([{ type: 'text', text: 'Done.' }], 'end_turn');
+msg = await client.messages.stream({ model: 'x', max_tokens: 100, tools, messages: [
+  { role: 'user', content: 'what files are here?' },
+  { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] },
+  { role: 'user', content: 'CRITICAL: Respond with TEXT ONLY. Summarize the conversation.' },
+] }).finalMessage();
+assert.equal(msg.content[0].text, 'Done.', 'compacting summary not translated');
+nextResponse = sseMsg([{ type: 'text', text: 'Done.' }], 'end_turn');
+msg = await client.messages.stream({ model: 'x', max_tokens: 100, tools,
+  system: [{ type: 'text', text: 'You are an agent for Claude Code, Anthropic\'s official CLI for Claude.' }],
+  messages: [{ role: 'user', content: 'what files are here?' }] }).finalMessage();
+assert.equal(msg.content[0].text, 'Done.', 'helper agent reply not translated');
+console.log('ok 10  "Always": typed English translated; compacting and helper agents untouched');
+fs.writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgPath, 'utf8')), output: 'auto' }));
+
 // ---- history.json: each translated prompt is an entry, its translated reply joins it
 const hist = JSON.parse(fs.readFileSync(path.join(home, 'history.json'), 'utf8'));
 const first = hist.find((h) => h.input_original === prompt.text);

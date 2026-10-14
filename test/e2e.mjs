@@ -145,6 +145,33 @@ assert.ok(sys.startsWith('CUSTOMMARK'), 'custom prompt used');
 assert.ok(sys.includes('Copy every placeholder'), 'fixed placeholder rule appended');
 console.log('ok  6  custom prompt used, safety rule kept');
 
+// ---- /loop and other commands with text: only the person's text is translated
+fs.writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgPath, 'utf8')), output: 'auto', prompts: {} }));
+const before = trCalls.length;
+const instructions = '# /loop — schedule a recurring prompt\n\nParse the input below.\n\nInput: 1m 请帮我修复';
+nextResponse = sseMsg([{ type: 'text', text: 'Done.' }], 'end_turn');
+await client.messages.stream({ model: 'x', max_tokens: 100, tools, messages: [{ role: 'user', content: [
+  { type: 'text', text: '<command-message>loop</command-message>\n<command-name>/loop</command-name>\n<command-args>1m 请帮我修复</command-args>' },
+  { type: 'text', text: instructions },
+] }] }).finalMessage();
+const sentBlocks = upReqs.at(-1).body.messages[0].content;
+assert.equal(sentBlocks[0].text.includes('<command-args>1m Please help me fix</command-args>'), true, 'args translated in place');
+assert.equal(sentBlocks[1].text, instructions.replace('1m 请帮我修复', '1m Please help me fix'), 'instructions untouched apart from the args');
+assert.equal(trCalls.slice(before).filter((c) => c.toEn).every((c) => !c.text.includes('/loop')), true, 'instructions never sent to the translator');
+console.log('ok  8  /loop: only the typed text is translated, the command instructions are not');
+
+// ---- A scheduled run re-sends the prompt Claude wrote: reply in the language the person typed in
+nextResponse = sseMsg([{ type: 'text', text: 'Done.' }], 'end_turn');
+msg = await client.messages.stream({ model: 'x', max_tokens: 100, tools, messages: [
+  { role: 'user', content: '请帮我修复' },
+  { role: 'assistant', content: [{ type: 'tool_use', id: 'c1', name: 'CronCreate', input: { cron: '*/5 * * * *', prompt: 'Check for new files and report them.' } }] },
+  { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'Scheduled' }] },
+  { role: 'assistant', content: [{ type: 'text', text: 'Done. Scheduled.' }] },
+  { role: 'user', content: 'Check for new files and report them.' },
+] }).finalMessage();
+assert.equal(msg.content[0].text.startsWith('完成。'), true, 'scheduled run reply translated');
+console.log('ok  9  scheduled /loop run: reply translated like the conversation');
+
 // ---- history.json: each translated prompt is an entry, its translated reply joins it
 const hist = JSON.parse(fs.readFileSync(path.join(home, 'history.json'), 'utf8'));
 const first = hist.find((h) => h.input_original === prompt.text);

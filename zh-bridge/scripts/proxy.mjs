@@ -53,19 +53,51 @@ const SKIP_BLOCK = /^\s*<(system-reminder|local-command-stdout|local-command-std
 
 const isPromptText = (t) => typeof t === 'string' && t.trim() && !SKIP_BLOCK.test(t);
 
-/** Text of the most recent message that a human actually typed (not tool results). */
+// Strings Claude itself wrote into tool calls. A scheduled task or /loop run fires
+// the prompt Claude stored with CronCreate / ScheduleWakeup, so such a "user"
+// message is Claude's own (English) wording, not something the person typed.
+function claudeWrittenStrings(messages) {
+  const found = new Set();
+  const walk = (v) => {
+    if (typeof v === 'string') { if (v.trim().length >= 8) found.add(v.trim()); }
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === 'object') Object.values(v).forEach(walk);
+  };
+  for (const m of messages) {
+    if (m.role === 'assistant' && Array.isArray(m.content)) {
+      for (const b of m.content) if (b.type === 'tool_use') walk(b.input);
+    }
+  }
+  return found;
+}
+
+/**
+ * Text of the most recent message the person actually typed: not tool results,
+ * and not a scheduled run re-sending a prompt Claude wrote.
+ */
 function latestHumanPrompt(messages) {
+  const automated = claudeWrittenStrings(messages);
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.role !== 'user') continue;
-    if (typeof m.content === 'string') return isPromptText(m.content) ? m.content : null;
-    if (!Array.isArray(m.content)) continue;
-    if (m.content.some((b) => b.type === 'tool_result')) continue; // mid-turn: keep looking back
-    const texts = m.content.filter((b) => b.type === 'text' && isPromptText(b.text)).map((b) => b.text);
-    if (texts.length) return texts.join('\n');
+    let text = null;
+    if (typeof m.content === 'string') text = isPromptText(m.content) ? m.content : null;
+    else if (Array.isArray(m.content)) {
+      if (m.content.some((b) => b.type === 'tool_result')) continue; // mid-turn: keep looking back
+      const texts = m.content.filter((b) => b.type === 'text' && isPromptText(b.text)).map((b) => b.text);
+      if (texts.length) text = texts.join('\n');
+    }
+    if (text === null) continue;
+    if (automated.has(text.trim())) continue; // a scheduled run: use the language of what was typed before
+    return text;
   }
   return null;
 }
+
+// A slash command or skill with text after it (/loop 5m 检查…, /my-skill 帮我…)
+// arrives as a <command-args> block plus the command's own instructions with
+// that text pasted in. Only the person's text needs translating.
+const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
 
 async function rewriteRequest(payload, cfg) {
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
@@ -75,18 +107,36 @@ async function rewriteRequest(payload, cfg) {
   let changed = false;
   const jobs = [];
 
-  const inJob = (text, apply) => {
-    if (!cfg.input || !isPromptText(text) || !hasCJK(text) || text.length > cfg.max_input_chars) return;
+  // English for `text`, from the cache or the translator; null on failure.
+  const english = async (text) => {
     const k = keyOf('in', text);
     const hit = cacheGet(k);
-    if (hit !== undefined) { apply(hit); changed = true; return; }
-    jobs.push(translate(text, 'in', cfg).then((en) => {
+    if (hit !== undefined) return hit;
+    try {
+      const en = await translate(text, 'in', cfg);
       cacheSet(k, en);
-      apply(en);
-      changed = true;
       recordHistory({ input_original: text, input_sent_to_claude: en });
       log('in  translated', text.length, '->', en.length, 'chars');
-    }).catch((e) => log('in  FAILED (sent original):', e.message)));
+      return en;
+    } catch (e) {
+      log('in  FAILED (sent original):', e.message);
+      return null;
+    }
+  };
+
+  const inJob = (text, apply) => {
+    if (!cfg.input || !isPromptText(text) || !hasCJK(text) || text.length > cfg.max_input_chars) return;
+    jobs.push(english(text).then((en) => { if (en !== null) { apply(en); changed = true; } }));
+  };
+
+  // Translate just the command's arguments and swap them into every block of the message.
+  const argsJob = (blocks, args) => {
+    jobs.push(english(args).then((en) => {
+      if (en === null) return;
+      for (const b of blocks) {
+        if (b.type === 'text' && b.text.includes(args)) { b.text = b.text.split(args).join(en); changed = true; }
+      }
+    }));
   };
 
   const restore = (text, apply) => {
@@ -99,7 +149,14 @@ async function rewriteRequest(payload, cfg) {
     if (m.role === 'user') {
       if (typeof m.content === 'string') inJob(m.content, (v) => { m.content = v; });
       else if (Array.isArray(m.content)) {
-        for (const b of m.content) if (b.type === 'text') inJob(b.text, (v) => { b.text = v; });
+        const argBlock = m.content.find((b) => b.type === 'text' && COMMAND_ARGS.test(b.text));
+        const args = argBlock?.text.match(COMMAND_ARGS)[1].trim();
+        const hasArgs = cfg.input && !!args && hasCJK(args) && args.length <= cfg.max_input_chars;
+        if (hasArgs) argsJob(m.content, args);
+        for (const b of m.content) {
+          if (b.type !== 'text' || (hasArgs && b.text.includes(args))) continue;
+          inJob(b.text, (v) => { b.text = v; });
+        }
       }
     } else if (m.role === 'assistant') {
       if (typeof m.content === 'string') restore(m.content, (v) => { m.content = v; });

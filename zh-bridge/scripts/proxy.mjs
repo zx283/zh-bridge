@@ -15,7 +15,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
-import { loadConfig, HOME_DIR, HISTORY_PATH, LOG_PATH, TYPED_PATH } from './lib/config.mjs';
+import { loadConfig, HOME_DIR, LOG_PATH, TYPED_PATH } from './lib/config.mjs';
 import { translate, hasCJK, cjkRatio, keyOf, cacheGet, cacheSet } from './lib/translator.mjs';
 
 fs.mkdirSync(HOME_DIR, { recursive: true });
@@ -24,19 +24,6 @@ function log(...a) {
   const line = `[${new Date().toISOString()}] ${a.join(' ')}\n`;
   try { fs.appendFileSync(LOG_PATH, line); } catch { /* ignore */ }
   if (process.env.ZH_BRIDGE_DEBUG) process.stderr.write(line);
-}
-
-// history.json: the last 50 translations, newest last (what /zh show displays).
-// A translated prompt starts a new entry; the translated reply joins it.
-function recordHistory(patch) {
-  const at = new Date().toISOString();
-  let hist = [];
-  try { hist = JSON.parse(fs.readFileSync(HISTORY_PATH, 'utf8')); } catch { /* none */ }
-  if (!Array.isArray(hist)) hist = [];
-  const lastEntry = hist[hist.length - 1];
-  if (patch.input_original || !lastEntry || lastEntry.output_from_claude) hist.push({ at, ...patch });
-  else Object.assign(lastEntry, patch, { at_reply: at });
-  try { fs.writeFileSync(HISTORY_PATH, JSON.stringify(hist.slice(-50), null, 2)); } catch { /* ignore */ }
 }
 
 const readBody = (req) => new Promise((resolve, reject) => {
@@ -141,7 +128,6 @@ async function rewriteRequest(payload, cfg) {
     try {
       const en = await translate(text, 'in', cfg);
       cacheSet(k, en);
-      recordHistory({ input_original: text, input_sent_to_claude: en });
       log('in  translated', text.length, '->', en.length, 'chars');
       return en;
     } catch (e) {
@@ -243,7 +229,6 @@ async function translateFinalText(blocks, cfg) {
     out.set(b.index, zh);
     cacheSet(keyOf('out', zh.trim()), b.text); // so we can restore English next turn
   }));
-  recordHistory({ output_from_claude: blocks.map((b) => b.text).join('\n'), output_shown_to_you: [...out.values()].join('\n') });
   return out;
 }
 
@@ -385,6 +370,17 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     const body = await readBody(req);
+    // /zh show: the plugin sends the texts of the current conversation and gets
+    // back the other side of each translation from the cache (local only).
+    if (req.method === 'POST' && req.url.startsWith('/__zh/lookup')) {
+      let q = {};
+      try { q = JSON.parse(body.toString('utf8')); } catch { /* empty */ }
+      const look = (ns, list, trim) => (Array.isArray(list) ? list : [])
+        .map((t) => (typeof t === 'string' ? cacheGet(keyOf(ns, trim ? t.trim() : t)) ?? null : null));
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ in: look('in', q.in, false), out: look('out', q.out, true) }));
+      return;
+    }
     const cfg = loadConfig();
     const pathOnly = req.url.split('?')[0];
     const isMessages = req.method === 'POST' && pathOnly.endsWith('/v1/messages');

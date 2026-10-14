@@ -78,7 +78,7 @@ Changes apply from your next message, with no restart.
 
 | command | |
 |---|---|
-| `/zh show` | your recent translations side by side: your language on the left, English on the right, for your message and Claude's reply. 1 = older, 2 = newer (last 50), Esc or 0 closes, mouse wheel scrolls |
+| `/zh show` | the translations in **this conversation**, side by side: your language on the left, English on the right, for your message and Claude's reply. Other sessions never show up; `--resume` brings a session's back, and after `/branch` both branches share the ones from before the branch point. 1 = older, 2 = newer, Esc or 0 closes, mouse wheel scrolls |
 | `/zh on` / `/zh off` | switch translation on or off |
 | `/zh status` | all settings as text |
 
@@ -109,10 +109,11 @@ Everything `/zh` changes lives in `~/.zh-bridge/config.json`:
 
 ## Good to know
 
-- **Privacy:** your prompts and Claude's final replies are sent to the translation provider you configure. Your API key, translation history (`history.json`, last 50), your last 30 typed prompts (`typed.json`, used by "Always"), cache and log stay in `~/.zh-bridge` on your machine.
+- **Privacy:** your prompts and Claude's final replies are sent to the translation provider you configure. Your API key, the translation cache (`cache.jsonl`, which `/zh show` reads from), your last 30 typed prompts (`typed.json`, used by "Always") and the log stay in `~/.zh-bridge` on your machine.
 - **The final reply doesn't stream.** It has to be complete before it can be translated, so it appears all at once, about 1–3 seconds after Claude finishes. Long replies are translated in parallel chunks.
 - **Commands with text after them** (`/btw …`, `/loop …`, your own skills) work: only the words you typed are translated, never the command's own instructions. Each scheduled `/loop` run replies in the language you were writing in.
 - **Auto mode:** because requests go through a local proxy, Claude Code bills auto mode's safety-check requests the old way and shows a notice about it once. Everything still works.
+- **`/zh show` after `/compact`:** compacting replaces the older part of the conversation with a summary, so only the turns after it are shown.
 - **Only what you type is translated.** File contents, tool results and text Claude Code adds itself (CLAUDE.md, reminders) are left as they are. Pasted blocks longer than `max_input_chars` pass through untranslated.
 - **If the proxy stops** and isn't restarted, Claude Code can't reach the API. Restart Claude Code (the plugin restarts the proxy), or run `./uninstall.sh`.
 - **Side panel too wide or too narrow?** If you ever dragged a Claude Code side panel, Claude Code remembers that width for every plugin panel. To reset it, quit Claude Code and remove `pluginPanes.dockColumns` from `~/.claude.json`.

@@ -6,7 +6,6 @@ import path from 'node:path';
 export const HOME_DIR = process.env.ZH_BRIDGE_HOME || path.join(os.homedir(), '.zh-bridge');
 export const CONFIG_PATH = path.join(HOME_DIR, 'config.json');
 export const CACHE_PATH = path.join(HOME_DIR, 'cache.jsonl');
-export const HISTORY_PATH = path.join(HOME_DIR, 'history.json'); // last 50 translations, newest last
 export const TYPED_PATH = path.join(HOME_DIR, 'typed.json');     // what the person last typed (written by /zh's plugin)
 export const LOG_PATH = path.join(HOME_DIR, 'proxy.log');
 

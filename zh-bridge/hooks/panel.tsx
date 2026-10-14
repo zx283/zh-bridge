@@ -276,21 +276,76 @@ async function useDefaultPrompt($: EngineInterface, name: 'input' | 'output'): P
 
 // ---------------------------------------------------------------- text commands
 
-// history.json: the last 50 translations, newest last.
-async function loadHistory($: EngineInterface): Promise<ZhEntry[]> {
-  const dir = await zhHome($)
+// ---------------------------------------------------------------- /zh show data
+
+// Built from the current conversation only, the same messages Claude sees, so
+// --resume brings a session's translations back, a /branch shares the ones from
+// before the branch point, and other sessions never show up.
+// The conversation holds your original prompts and the translated replies you
+// were shown; the proxy's cache holds the other side of each (/__zh/lookup).
+const SKIP_BLOCK = /^\s*<(system-reminder|local-command-stdout|local-command-stderr|local-command-caveat|bash-stdout|bash-stderr|task-notification)\b/
+const CJK = /[㐀-䶿一-鿿豈-﫿]/
+const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/
+const COMMAND_ECHO = /^\s*<command-(name|message|args)>/
+
+type Turn = { shown: string; keys: string[]; reply: string[] }
+
+const blockText = (b: { type: string; [k: string]: unknown }): string | null =>
+  b.type === 'text' && typeof b.text === 'string' && b.text.trim() ? b.text : null
+
+async function lookup($: EngineInterface, port: number, q: { in: string[]; out: string[] }): Promise<{ in: (string | null)[]; out: (string | null)[] }> {
+  const none = { in: q.in.map(() => null), out: q.out.map(() => null) }
+  if (!q.in.length && !q.out.length) return none
   try {
-    const h = JSON.parse(await $.fs.read(`${dir}/history.json`))
-    return Array.isArray(h) ? (h as ZhEntry[]) : []
+    const r = await $.process.run(
+      ['curl', '-s', '-m', '5', '-X', 'POST', '-H', 'content-type: application/json', '--data-binary', '@-', `http://127.0.0.1:${port}/__zh/lookup`],
+      { stdin: JSON.stringify(q), timeoutMs: 8000 },
+    )
+    const j = JSON.parse(r.stdout)
+    return { in: Array.isArray(j.in) ? j.in : none.in, out: Array.isArray(j.out) ? j.out : none.out }
   } catch {
-    return []
+    return none
   }
 }
 
-function when(iso: string | undefined): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+async function sessionTranslations($: EngineInterface): Promise<ZhEntry[]> {
+  const messages = await $.session.messages({ as: 'api' })
+  const turns: Turn[] = []
+  for (const m of messages) {
+    if (m.role === 'user') {
+      if (m.content.some(b => b.type === 'tool_result')) continue // mid-turn
+      const texts = m.content.map(blockText).filter((t): t is string => t !== null && !SKIP_BLOCK.test(t))
+      if (!texts.length) continue
+      const args = texts.map(t => t.match(COMMAND_ARGS)?.[1].trim()).find(a => a)
+      // what you typed: a command's arguments, or the text that isn't a command echo (/branch, /clear…)
+      const typed = texts.filter(t => !COMMAND_ECHO.test(t))
+      const keys = args ? [args] : typed.filter(t => CJK.test(t))
+      turns.push({ shown: args ?? (keys.length ? keys : typed).join('\n'), keys, reply: [] })
+    } else if (turns.length) {
+      // the turn's final reply: the text blocks of its last assistant message with text
+      const texts = m.content.map(blockText).filter((t): t is string => t !== null)
+      if (texts.length) turns[turns.length - 1].reply = texts
+    }
+  }
+  const s = await read($, settings)
+  const port = s?.port ?? toSettings(await readRaw($)).port
+  const ins = turns.flatMap(t => t.keys)
+  const outs = turns.flatMap(t => t.reply.filter(r => CJK.test(r)))
+  const found = await lookup($, port, { in: ins, out: outs })
+  const enIn = new Map(ins.map((t, i) => [t, found.in[i]]))
+  const enOut = new Map(outs.map((t, i) => [t, found.out[i]]))
+
+  const entries: ZhEntry[] = []
+  for (const t of turns) {
+    const inEn = t.keys.map(k => enIn.get(k)).filter((x): x is string => !!x)
+    const outPairs = t.reply.filter(r => CJK.test(r)).map(r => [r, enOut.get(r)] as const).filter(([, en]) => !!en)
+    if (!inEn.length && !outPairs.length) continue
+    entries.push({
+      ...(inEn.length ? { input_original: t.shown, input_sent_to_claude: inEn.join('\n\n') } : {}),
+      ...(outPairs.length ? { output_shown_to_you: outPairs.map(([zh]) => zh).join('\n\n'), output_from_claude: outPairs.map(([, en]) => en).join('\n\n') } : {}),
+    })
+  }
+  return entries
 }
 
 function statusText(s: ZhSettings, proxy: ZhHealth): string {
@@ -411,7 +466,7 @@ function drawSettings($: EngineInterface, els: Els, s: ZhSettings, proxy: ZhHeal
 function drawShow($: EngineInterface, els: Els, list: ZhEntry[], idx: number, inPane: boolean, close: () => void) {
   const { Box, Text, Button, Markdown } = els
   const entry = list[idx]
-  if (!entry) return <Text dimColor>Nothing translated yet.</Text>
+  if (!entry) return <Text dimColor>No translations in this conversation yet.</Text>
   const go = (to: number) => update($, showIndex, () => Math.min(Math.max(to, 0), list.length - 1))
 
   // Drawn as Markdown, the way Claude Code draws a reply.
@@ -435,7 +490,7 @@ function drawShow($: EngineInterface, els: Els, list: ZhEntry[], idx: number, in
         <Text bold>{idx + 1} / {list.length}</Text>
         <Button key="newer" plain hotkey="2" dimColor={idx === list.length - 1} label="Newer ▶" onPress={() => void go(idx + 1)} />
         <Button key="close" plain hotkey="0" label="Close" onPress={close} />
-        <Text dimColor>{when(entry.at)}{idx === list.length - 1 ? ' · latest' : ''}</Text>
+        <Text dimColor>{idx === list.length - 1 ? 'latest · this conversation' : 'this conversation'}</Text>
       </Box>
       <Text dimColor>{help}</Text>
       {hasInput && (
@@ -474,9 +529,9 @@ export const register: Register = on => {
     // Fullscreen docks panes at the side, so there we draw in the band instead.
     const isFullscreen = e.presentation?.isFullscreen !== false
     if (arg === 'show') {
-      const h = await loadHistory($)
+      const h = await sessionTranslations($)
       if (!h.length) {
-        return { text: 'Nothing translated yet. Write a message in Chinese, then run /zh show.' }
+        return { text: 'No translations in this conversation yet. Write a message in Chinese, then run /zh show.' }
       }
       await update($, history, () => h)
       await update($, showIndex, () => h.length - 1)

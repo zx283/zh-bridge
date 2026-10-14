@@ -117,15 +117,13 @@ assert.equal(upReqs.at(-1).body.messages[0].content, '坏掉 FAIL', 'input falls
 assert.equal(msg.content[0].text, 'Done. FAIL', 'output falls back to English');
 console.log('ok  3  translator failure falls back to original text');
 
-// ---- Side request without tools (Claude Code's session-title call): untouched both ways, not in history
-const histLenBefore = JSON.parse(fs.readFileSync(path.join(home, 'history.json'), 'utf8')).length;
+// ---- Side request without tools (Claude Code's session-title call): untouched both ways
 const titleAsk = '<session>\n这个文件夹在说什么？\n</session>\n\nWrite the title in the predominant language of the session.';
 nextResponse = sseMsg([{ type: 'text', text: '{"title":"文件夹说明"}' }], 'end_turn');
 msg = await client.messages.stream({ model: 'x', max_tokens: 100, messages: [{ role: 'user', content: titleAsk }] }).finalMessage();
 assert.equal(upReqs.at(-1).body.messages[0].content, titleAsk, 'side request input untouched');
 assert.equal(msg.content[0].text, '{"title":"文件夹说明"}', 'side request output untouched');
-assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'history.json'), 'utf8')).length, histLenBefore, 'not recorded');
-console.log('ok  4  side request (session title) untouched both ways, not recorded');
+console.log('ok  4  side request (session title) untouched both ways');
 
 // ---- Config changes (what /zh writes) apply live, no restart
 const cfgPath = path.join(home, 'config.json');
@@ -194,13 +192,14 @@ assert.equal(msg.content[0].text, 'Done.', 'helper agent reply not translated');
 console.log('ok 10  "Always": typed English translated; compacting and helper agents untouched');
 fs.writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgPath, 'utf8')), output: 'auto' }));
 
-// ---- history.json: each translated prompt is an entry, its translated reply joins it
-const hist = JSON.parse(fs.readFileSync(path.join(home, 'history.json'), 'utf8'));
-const first = hist.find((h) => h.input_original === prompt.text);
-assert.equal(first.input_sent_to_claude, 'Please help me fix this function `foo_bar()`，thanks');
-assert.equal(first.output_from_claude, 'Done. I fixed `foo_bar()` in a.py.');
-assert.equal(first.output_shown_to_you, '完成。 我修复了 `foo_bar()` in a.py.');
-console.log('ok  7  history.json pairs each prompt with its reply (' + hist.length + ' entries)');
+// ---- /__zh/lookup: what /zh show asks for, both directions, from the cache
+const lk = await fetch(`http://127.0.0.1:${P.proxy}/__zh/lookup`, { method: 'POST', body: JSON.stringify({
+  in: [prompt.text, '从没翻译过'], out: ['完成。 我修复了 `foo_bar()` in a.py.'],
+}) }).then((r) => r.json());
+assert.deepEqual(lk.in, ['Please help me fix this function `foo_bar()`，thanks', null]);
+assert.deepEqual(lk.out, ['Done. I fixed `foo_bar()` in a.py.']);
+assert.equal(fs.existsSync(path.join(home, 'history.json')), false, 'no shared history file any more');
+console.log('ok  7  /__zh/lookup returns both sides of each translation; no history.json');
 proxy.kill();
 console.log('\nALL TESTS PASSED');
 process.exit(0);

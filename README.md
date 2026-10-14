@@ -51,12 +51,12 @@ Uninstall: `./uninstall.sh` (add `--purge` to also delete `~/.zh-bridge`).
 ## `/zh` settings
 
 ```
-Chinese ⇄ English translation  ● proxy running · translator: deepseek-chat
+Chinese ⇄ English translation  ● proxy running · translator: deepseek-flash
 1: Translation          On ▾
 2: Translate my input   On ▾
 3: Translate output     On ▾
 4: Reply language       简体中文 ▾
-5: Model                deepseek-chat ▾
+5: Model                deepseek-flash ▾
 6: API URL              https://api.deepseek.com ▾
 7: API key              sk-…abcd ▾
 8: Input prompt         Default ▾
@@ -97,7 +97,7 @@ Everything `/zh` changes lives in `~/.zh-bridge/config.json`:
   "max_input_chars": 12000,
   "translator": {
     "base_url": "https://api.deepseek.com",
-    "model": "deepseek-chat",
+    "model": "deepseek-flash",
     "api_key": "sk-...",
     "timeout_ms": 45000,
     "chunk_chars": 3000

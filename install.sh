@@ -27,12 +27,25 @@ if [ ! -f "$ZH_HOME/config.json" ]; then
   ZH_KEY="$KEY" ZH_PORT="$PORT" "$NODE" -e '
     const fs = require("fs");
     const cfg = { port: +process.env.ZH_PORT, input: true, output: "auto", target_lang: "Simplified Chinese",
-      translator: { base_url: "https://api.deepseek.com", model: "deepseek-chat", api_key: process.env.ZH_KEY } };
+      translator: { base_url: "https://api.deepseek.com", model: "deepseek-flash", api_key: process.env.ZH_KEY } };
     fs.writeFileSync(process.argv[1], JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
   ' "$ZH_HOME/config.json"
   echo "✓ wrote $ZH_HOME/config.json"
 else
   echo "✓ keeping existing $ZH_HOME/config.json"
+  # DeepSeek renamed its models: the old default "deepseek-chat" becomes "deepseek-flash"
+  "$NODE" -e '
+    const fs = require("fs"); const f = process.argv[1];
+    try {
+      const c = JSON.parse(fs.readFileSync(f, "utf8"));
+      const t = c.translator || {};
+      if (t.model === "deepseek-chat" && (!t.base_url || t.base_url.includes("deepseek.com"))) {
+        t.model = "deepseek-flash"; c.translator = t;
+        fs.writeFileSync(f, JSON.stringify(c, null, 2) + "\n", { mode: 0o600 });
+        console.log("✓ translator model updated: deepseek-chat → deepseek-flash");
+      }
+    } catch {}
+  ' "$ZH_HOME/config.json"
 fi
 
 # ---- 2. proxy as a login service (copied to ~/.zh-bridge/app: macOS blocks background agents from Desktop/Documents)

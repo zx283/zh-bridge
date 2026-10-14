@@ -67,7 +67,7 @@ const mountBand = ($: any, surface: string) =>
 for (const surface of SURFACES) {
   test(`/zh opens a numbered list at the bottom; numbers and pickers save (${surface})`, async ($, on) => {
     const files: Record<string, string> = {
-      [CONFIG]: JSON.stringify({ translator: { api_key: 'sk-secret-abcd', model: 'deepseek-chat' } }),
+      [CONFIG]: JSON.stringify({ translator: { api_key: 'sk-secret-abcd', model: 'deepseek-flash' } }),
     }
     fakeHost(on, files)
     const ui = await mountBand($, surface)

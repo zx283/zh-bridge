@@ -57,7 +57,7 @@ const FIELD_LABEL: Record<ZhField, string> = {
 }
 
 const PRESETS: Record<ZhField, string[]> = {
-  model: ['deepseek-chat', 'deepseek-reasoner'],
+  model: ['deepseek-flash', 'deepseek-v4-pro'],
   base_url: ['https://api.deepseek.com', 'https://dashscope.aliyuncs.com/compatible-mode/v1'],
   api_key: [],
 }
@@ -121,7 +121,7 @@ function toSettings(raw: Raw): ZhSettings {
     output: raw.output === 'off' ? 'off' : raw.output === 'always' ? 'always' : 'auto',
     target_lang: typeof raw.target_lang === 'string' ? raw.target_lang : 'Simplified Chinese',
     port: typeof raw.port === 'number' ? raw.port : 8787,
-    model: raw.translator?.model ?? 'deepseek-chat',
+    model: raw.translator?.model ?? 'deepseek-flash',
     base_url: raw.translator?.base_url ?? 'https://api.deepseek.com',
     key_hint: maskKey(raw.translator?.api_key),
     prompt_input: raw.prompts?.input === 'custom' ? 'custom' : 'default',

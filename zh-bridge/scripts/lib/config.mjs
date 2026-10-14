@@ -19,7 +19,7 @@ export const DEFAULTS = {
   max_input_chars: 12000,     // longer pasted blocks are passed through untranslated
   translator: {
     base_url: 'https://api.deepseek.com', // any OpenAI-compatible endpoint
-    model: 'deepseek-chat',
+    model: 'deepseek-flash',
     api_key: '',
     timeout_ms: 45000,
     chunk_chars: 3000,

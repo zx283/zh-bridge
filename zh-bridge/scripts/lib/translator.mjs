@@ -121,8 +121,11 @@ function unmask(t, saved) {
   // that has inline code in it), which only appear once it's put back.
   for (let i = saved.length - 1; i >= 0; i--) {
     const ph = `⟦${i}⟧`;
-    if (!t.includes(ph)) throw new Error(`translator dropped placeholder ${i}`);
-    t = t.split(ph).join(saved[i]);
+    const n = t.split(ph).length - 1;
+    if (n === 0) throw new Error(`translator dropped placeholder ${i}`);
+    // Copied twice would put that text (a paste, a code block) in the message twice.
+    if (n > 1) throw new Error(`translator repeated placeholder ${i}`);
+    t = t.replace(ph, () => saved[i]);
   }
   return t;
 }

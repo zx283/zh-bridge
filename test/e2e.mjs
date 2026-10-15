@@ -27,9 +27,10 @@ http.createServer((req, res) => {
     const toEn = j.messages[0].content.includes('into natural, precise English');
     trCalls.push({ toEn, text, system: j.messages[0].content, max_tokens: j.max_tokens });
     if (text.includes('FAIL')) { res.writeHead(500); res.end('boom'); return; }
-    const out = toEn
+    let out = toEn
       ? text.replace('请帮我修复', 'Please help me fix ').replace('这个函数', 'this function').replace('谢谢', 'thanks')
       : text.replace('Done.', '完成。').replace('I fixed', '我修复了');
+    if (text.includes('重复')) out += ' ⟦0⟧'; // a translator that copies a placeholder twice
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: out } }] }));
   });
@@ -215,6 +216,12 @@ fs.writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgPath
   assert.equal(outCall.max_tokens, 65536, 'room for the translator to think');
   console.log('ok 12  only Chinese translated; English lines and long pastes kept; reply translator gets the request');
 }
+
+// ---- A translator that copies a placeholder twice: the original is sent, nothing doubled
+nextResponse = sseMsg([{ type: 'text', text: 'Done.' }], 'end_turn');
+await client.messages.stream({ model: 'x', max_tokens: 100, tools, messages: [{ role: 'user', content: '重复 `npm test`' }] }).finalMessage();
+assert.equal(upReqs.at(-1).body.messages[0].content, '重复 `npm test`', 'repeated placeholder: original sent');
+console.log('ok 13  a placeholder copied twice falls back to the original text');
 
 // ---- /__zh/lookup: what /zh show asks for, both directions, from the cache
 const lk = await fetch(`http://127.0.0.1:${P.proxy}/__zh/lookup`, { method: 'POST', body: JSON.stringify({

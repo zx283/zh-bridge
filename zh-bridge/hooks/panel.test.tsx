@@ -132,10 +132,12 @@ test('missing key is flagged', async ($, on) => {
 })
 
 for (const surface of SURFACES) {
-  test(`/zh show: this conversation only, side by side, older/newer (${surface})`, async ($, on) => {
+  test(`/zh show: this conversation only, older/newer, copy one side, layout (${surface})`, async ($, on) => {
     const files: Record<string, string> = { [CONFIG]: '{}' }
     fakeHost(on, files)
     on('session.messages', async () => ({ value: CONVERSATION }))
+    const copied: string[] = []
+    on('ui.copy', async (_$: any, e: any) => { copied.push(e.text); return { value: { isCopied: true } } })
     const ui = await mountBand($, surface)
     await $.command.run({ command: 'zh', args: 'show' })
     expect(await ui.find({ text: /3 \/ 3/ })).toBeDefined() // 旧的消息, 你好, 分支里的问题
@@ -154,6 +156,17 @@ for (const surface of SURFACES) {
     expect(await ui.find({ text: /1 \/ 3/ })).toBeDefined()
     await ui.press({ key: 'newer' })
     expect(await ui.find({ text: /2 \/ 3/ })).toBeDefined()
+
+    // 3 / 4 copy one side only; 5 puts the two one above the other
+    await ui.press({ key: 'copy-mine' })
+    await ui.press({ key: 'copy-english' })
+    expect(copied).toEqual(['你好呀', 'Hi there'])
+    expect(await ui.find({ text: /Copied the reply \(English\)/ })).toBeDefined()
+    await ui.press({ key: 'layout' })
+    expect(await ui.find({ text: 'Side by side' })).toBeDefined()
+    expect(await ui.find({ text: 'Hi there' })).toBeDefined()
+    await ui.press({ key: 'layout' })
+    expect(await ui.find({ text: 'One above the other' })).toBeDefined()
     await ui.press({ key: 'close' }) // 0 closes
     expect(await ui.find({ text: /Translations/ })).toBeUndefined()
   })

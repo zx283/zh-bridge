@@ -44,8 +44,19 @@ function loadPrompt(name, cfg) {
   return fs.readFileSync(path.join(HERE, 'prompts', `${name}.txt`), 'utf8').trim();
 }
 
-const systemPrompt = (direction, cfg) =>
-  loadPrompt(direction === 'in' ? 'input' : 'output', cfg).replaceAll('{lang}', cfg.target_lang) + FIXED_RULES;
+// The request a reply answers, given to the output translator as context, so it can
+// tell a draft meant to stay in English (an email answering an English email) from
+// the explanation around it. Long requests are cut to their start and end.
+function contextNote(context) {
+  let c = (context || '').trim();
+  if (!c) return '';
+  if (c.length > 2000) c = c.slice(0, 1500) + '\n[…]\n' + c.slice(-500);
+  return `\n\nContext only, never translate or output it. The user's request that this reply answers:\n<<<\n${c}\n>>>`;
+}
+
+const systemPrompt = (direction, cfg, context) =>
+  loadPrompt(direction === 'in' ? 'input' : 'output', cfg).replaceAll('{lang}', cfg.target_lang)
+  + (direction === 'out' ? contextNote(context) : '') + FIXED_RULES;
 
 // ---------- masking ----------
 
@@ -53,27 +64,72 @@ const MASKS = [
   /```[\s\S]*?```/g,                      // fenced code
   /~~~[\s\S]*?~~~/g,
   /`[^`\n]+`/g,                           // inline code
-  /<\/?[A-Za-z_][\w:-]*(?:\s[^<>\n]*)?\/?>/g, // xml-ish tags (<pasted_content id=...>, <system-reminder>, ...)
+  /<\/?[A-Za-z_][\w:-]*(?:\s[^<>\n]*)?\/?>/g, // xml-ish tags (<system-reminder>, <command-args>, ...)
   /\[(?:Image|Pasted text|Pasted image)[^\]\n]*\]/g, // Claude Code placeholders
   /https?:\/\/[^\s)>\]]+/g,               // URLs
 ];
 
-function mask(text) {
+// Text pasted into the prompt, as Claude Code wraps it.
+const PASTE = /<pasted_content(?: id="([^"]*)")?>([\s\S]*?)<\/pasted_content(?: id="\1")?>/g;
+
+function mask(text, direction, cfg) {
   const saved = [];
+  const keep = (m) => { saved.push(m); return `⟦${saved.length - 1}⟧`; };
   let t = text;
-  for (const re of MASKS) {
-    t = t.replace(re, (m) => { saved.push(m); return `⟦${saved.length - 1}⟧`; });
+  if (direction === 'in') {
+    // A long paste goes to Claude as it is: Claude reads Chinese fine, and only what
+    // the person typed needs translating. A short one is translated with the rest.
+    const max = cfg.paste_translate_max_chars ?? 300;
+    t = t.replace(PASTE, (m, _id, body) => (!hasCJK(body) || body.trim().length > max ? keep(m) : m));
   }
+  for (const re of MASKS) t = t.replace(re, keep);
+  if (direction === 'in') t = maskNonChinese(t, keep);
   return { t, saved };
 }
 
-function unmask(t, saved) {
-  for (let i = 0; i < saved.length; i++) {
-    if (!t.includes(`⟦${i}⟧`)) throw new Error(`translator dropped placeholder ${i}`);
+// Prompt -> English: lines with no Chinese in them (English already, a quoted email,
+// a log) are kept exactly as they are, so only the Chinese is translated.
+function maskNonChinese(t, keep) {
+  const lines = t.split('\n');
+  const out = [];
+  let run = [];
+  const flush = () => {
+    if (!run.length) return;
+    let a = 0, b = run.length;
+    while (a < b && !run[a].trim()) out.push(run[a++]);           // leading blank lines stay
+    const tail = [];
+    while (b > a && !run[b - 1].trim()) tail.unshift(run[--b]);   // trailing ones too
+    const body = run.slice(a, b);
+    if (body.length) {
+      const joined = body.join('\n');
+      // Keep the line's own indentation outside, so the layout around it survives.
+      const lead = joined.match(/^[ \t]*/)[0];
+      out.push(/[A-Za-z0-9]/.test(joined) ? lead + keep(joined.slice(lead.length)) : joined);
+    }
+    out.push(...tail);
+    run = [];
+  };
+  for (const line of lines) {
+    if (hasCJK(line)) { flush(); out.push(line); } else run.push(line);
   }
-  // Restore in reverse so nested masks (a URL inside a tag) resolve correctly.
-  for (let i = saved.length - 1; i >= 0; i--) t = t.split(`⟦${i}⟧`).join(saved[i]);
+  flush();
+  return out.join('\n');
+}
+
+function unmask(t, saved) {
+  // Newest first: a later mask can hold earlier placeholders (a line kept as it is
+  // that has inline code in it), which only appear once it's put back.
+  for (let i = saved.length - 1; i >= 0; i--) {
+    const ph = `⟦${i}⟧`;
+    if (!t.includes(ph)) throw new Error(`translator dropped placeholder ${i}`);
+    t = t.split(ph).join(saved[i]);
+  }
   return t;
+}
+
+/** The part of a prompt that would actually be sent to the translator. */
+export function translatablePart(text, cfg) {
+  return mask(text, 'in', cfg).t.replace(/⟦\d+⟧/g, '');
 }
 
 // Split masked text into chunks at blank lines (code is already masked, so this never cuts code).
@@ -128,7 +184,7 @@ async function callModel(system, text, tcfg) {
   if (!tcfg.api_key) throw new Error('no translator api_key configured (~/.zh-bridge/config.json)');
   const url = tcfg.base_url.replace(/\/+$/, '') + '/chat/completions';
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), tcfg.timeout_ms || 45000);
+  const timer = setTimeout(() => ctrl.abort(), tcfg.timeout_ms || 180000);
   try {
     const r = await fetch(url, {
       method: 'POST',
@@ -137,7 +193,8 @@ async function callModel(system, text, tcfg) {
       body: JSON.stringify({
         model: tcfg.model,
         temperature: 0,
-        max_tokens: 8192,
+        // DeepSeek thinks before answering (on by default); leave it room to.
+        max_tokens: tcfg.max_tokens || 65536,
         stream: false,
         messages: [{ role: 'system', content: system }, { role: 'user', content: text }],
       }),
@@ -156,12 +213,13 @@ async function callModel(system, text, tcfg) {
 
 /**
  * Translate `text`. direction: 'in' (-> English) or 'out' (-> cfg.target_lang).
+ * context: for 'out', the request the reply answers (helps keep English drafts English).
  * Throws on failure; callers fall back to the original text.
  */
-export async function translate(text, direction, cfg) {
+export async function translate(text, direction, cfg, context = '') {
   const tcfg = cfg.translator;
-  const system = systemPrompt(direction, cfg);
-  const { t, saved } = mask(text);
+  const system = systemPrompt(direction, cfg, context);
+  const { t, saved } = mask(text, direction, cfg);
   // Nothing translatable left (e.g. all code)? Return as-is.
   if (direction === 'in' && !hasCJK(t)) return text;
   if (direction === 'out' && !/[A-Za-z]/.test(t)) return text;

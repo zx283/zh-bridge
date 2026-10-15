@@ -25,6 +25,10 @@ const notice = atom({ plugin: 'zh-bridge', key: 'notice' } as const, null)
 const view = atom({ plugin: 'zh-bridge', key: 'view' } as const, 'none')
 const history = atom({ plugin: 'zh-bridge', key: 'history' } as const, [])
 const showIndex = atom({ plugin: 'zh-bridge', key: 'showIndex' } as const, 0)
+// /zh show: side by side, or one above the other (a terminal selects whole rows,
+// so stacked lets you select one side with the mouse). Plus the last copy's result.
+const showLayout = atom({ plugin: 'zh-bridge', key: 'showLayout' } as const, 'side')
+const showNotice = atom({ plugin: 'zh-bridge', key: 'showNotice' } as const, null)
 
 type RowKey = 'enabled' | 'input' | 'output' | 'lang' | ZhField | 'prompt_input' | 'prompt_output'
 
@@ -480,24 +484,38 @@ function drawSettings($: EngineInterface, els: Els, s: ZhSettings, proxy: ZhHeal
 }
 
 // /zh show: original and English side by side, ◀ ▶ through history.
-function drawShow($: EngineInterface, els: Els, list: ZhEntry[], idx: number, inPane: boolean, close: () => void) {
+function drawShow($: EngineInterface, els: Els, list: ZhEntry[], idx: number, layout: 'side' | 'stacked', note: string | null, inPane: boolean, close: () => void) {
   const { Box, Text, Button, Markdown } = els
   const entry = list[idx]
   if (!entry) return <Text dimColor>No translations in this conversation yet.</Text>
-  const go = (to: number) => update($, showIndex, () => Math.min(Math.max(to, 0), list.length - 1))
+  const go = async (to: number) => {
+    await update($, showNotice, () => null)
+    await update($, showIndex, () => Math.min(Math.max(to, 0), list.length - 1))
+  }
+  const stacked = layout === 'stacked'
 
   // Drawn as Markdown, the way Claude Code draws a reply.
   const column = (title: string, text: string | undefined, isEnglish: boolean) => (
-    <Box flexDirection="column" width="50%" borderStyle="round" borderColor="gray" paddingX={1}>
+    <Box flexDirection="column" width={stacked ? '100%' : '50%'} borderStyle="round" borderColor="gray" paddingX={1}>
       <Text bold color={isEnglish ? 'cyan' : 'yellow'}>{title}</Text>
       <Markdown text={text?.trim() || '—'} />
     </Box>
   )
+  const pair = (a: any, b: any) => <Box flexDirection={stacked ? 'column' : 'row'}>{a}{b}</Box>
   const hasInput = !!entry.input_original
   const hasOutput = !!entry.output_from_claude
+  // Copy the reply (or, when the reply wasn't translated, the message) in either language.
+  const mine = hasOutput ? entry.output_shown_to_you : entry.input_original
+  const english = hasOutput ? entry.output_from_claude : entry.input_sent_to_claude
+  const what = hasOutput ? 'reply' : 'message'
+  const copy = async (text: string | undefined, label: string, surface: any) => {
+    if (!text) return
+    const r = await $.ui.copy({ text: text.trim(), surface })
+    await update($, showNotice, () => r.isCopied ? `Copied the ${label}.` : `Couldn't copy (${r.reason}).`)
+  }
   const help = inPane
-    ? '1 older · 2 newer · wheel / PgUp / PgDn scroll · Esc close'
-    : '1 older · 2 newer · 0 close · mouse wheel scrolls'
+    ? `1 older · 2 newer · 3/4 copy · 5 layout · wheel / PgUp / PgDn scroll · Esc close`
+    : `1 older · 2 newer · 3/4 copy · 5 layout · 0 close · mouse wheel scrolls`
 
   return (
     <Box flexDirection="column">
@@ -509,19 +527,16 @@ function drawShow($: EngineInterface, els: Els, list: ZhEntry[], idx: number, in
         <Button key="close" plain hotkey="0" label="Close" onPress={close} />
         <Text dimColor>{idx === list.length - 1 ? 'latest · this conversation' : 'this conversation'}</Text>
       </Box>
+      <Box flexDirection="row" gap={2}>
+        <Button key="copy-mine" plain hotkey="3" label={`Copy ${what} (translated)`} onPress={p => void copy(mine, `${what} (translated)`, p.surface)} />
+        <Button key="copy-english" plain hotkey="4" label={`Copy ${what} (English)`} onPress={p => void copy(english, `${what} (English)`, p.surface)} />
+        <Button key="layout" plain hotkey="5" label={stacked ? 'Side by side' : 'One above the other'}
+          onPress={() => void update($, showLayout, (l: 'side' | 'stacked') => l === 'stacked' ? 'side' : 'stacked')} />
+        {note && <Text color="green">{note}</Text>}
+      </Box>
       <Text dimColor>{help}</Text>
-      {hasInput && (
-        <Box flexDirection="row">
-          {column('You typed', entry.input_original, false)}
-          {column('Claude saw', entry.input_sent_to_claude, true)}
-        </Box>
-      )}
-      {hasOutput && (
-        <Box flexDirection="row">
-          {column('Shown to you', entry.output_shown_to_you, false)}
-          {column('Claude wrote', entry.output_from_claude, true)}
-        </Box>
-      )}
+      {hasInput && pair(column('You typed', entry.input_original, false), column('Claude saw', entry.input_sent_to_claude, true))}
+      {hasOutput && pair(column('Shown to you', entry.output_shown_to_you, false), column('Claude wrote', entry.output_from_claude, true))}
       {!hasOutput && <Text dimColor>(the reply to this message was not translated)</Text>}
     </Box>
   )
@@ -558,6 +573,7 @@ export const register: Register = on => {
       }
       await update($, history, () => h)
       await update($, showIndex, () => h.length - 1)
+      await update($, showNotice, () => null)
       if (isFullscreen) {
         await update($, view, () => 'show')
       } else {
@@ -644,7 +660,7 @@ export const register: Register = on => {
     if (v === 'show') {
       const list = await read($, history)
       const idx = Math.min(Math.max(await read($, showIndex), 0), Math.max(list.length - 1, 0))
-      return drawShow($, els, list, idx, false, close)
+      return drawShow($, els, list, idx, await read($, showLayout), await read($, showNotice), false, close)
     }
     const s = await read($, settings)
     if (!s) return next(e)
@@ -666,6 +682,6 @@ export const register: Register = on => {
     const els = $.ui.resolve(e)
     const list = await read($, history)
     const idx = Math.min(Math.max(await read($, showIndex), 0), Math.max(list.length - 1, 0))
-    return drawShow($, els, list, idx, true, () => void $.ui.close({ id: SHOW }))
+    return drawShow($, els, list, idx, await read($, showLayout), await read($, showNotice), true, () => void $.ui.close({ id: SHOW }))
   })
 }

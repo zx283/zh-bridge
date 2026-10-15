@@ -25,7 +25,7 @@ http.createServer((req, res) => {
     const j = JSON.parse(b);
     const text = j.messages[1].content;
     const toEn = j.messages[0].content.includes('into natural, precise English');
-    trCalls.push({ toEn, text, system: j.messages[0].content });
+    trCalls.push({ toEn, text, system: j.messages[0].content, max_tokens: j.max_tokens });
     if (text.includes('FAIL')) { res.writeHead(500); res.end('boom'); return; }
     const out = toEn
       ? text.replace('请帮我修复', 'Please help me fix ').replace('这个函数', 'this function').replace('谢谢', 'thanks')
@@ -191,6 +191,30 @@ msg = await client.messages.stream({ model: 'x', max_tokens: 100, tools,
 assert.equal(msg.content[0].text, 'Done.', 'helper agent reply not translated');
 console.log('ok 10  "Always": typed English translated; compacting and helper agents untouched');
 fs.writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgPath, 'utf8')), output: 'auto' }));
+
+// ---- Only the Chinese the person typed is translated: English lines and long pastes
+//      reach Claude as they are; the reply's translator is told what was asked.
+{
+  const longPaste = '<pasted_content id="1">' + '这是一段很长的粘贴的中文内容。'.repeat(40) + '</pasted_content id="1">';
+  const shortPaste = '<pasted_content id="2">谢谢</pasted_content id="2">';
+  const typed = '请帮我修复这封邮件 ' + shortPaste + '\n\nDear Prof. Smith,\nThanks for `the notes`.\n\nBest,\nZ\n\n' + longPaste;
+  const n = trCalls.length;
+  nextResponse = sseMsg([{ type: 'text', text: 'I fixed the email:\n\nDear Prof. Smith, ...' }], 'end_turn');
+  await client.messages.stream({ model: 'x', max_tokens: 100, tools, messages: [{ role: 'user', content: typed }] }).finalMessage();
+  const sentText = upReqs.at(-1).body.messages[0].content;
+  assert.ok(sentText.startsWith('Please help me fix'), 'Chinese translated');
+  assert.ok(sentText.includes('<pasted_content id="2">thanks</pasted_content id="2">'), 'short paste translated');
+  assert.ok(sentText.includes('\n\nDear Prof. Smith,\nThanks for `the notes`.\n\nBest,\nZ\n\n'), 'English lines kept exactly');
+  assert.ok(sentText.endsWith(longPaste), 'long paste kept exactly');
+  const inCalls = trCalls.slice(n).filter((c) => c.toEn);
+  assert.equal(inCalls.length, 1);
+  assert.ok(!inCalls[0].text.includes('Dear') && !inCalls[0].text.includes('很长'), 'English lines and long paste never sent to the translator');
+  const outCall = trCalls.slice(n).find((c) => !c.toEn);
+  assert.ok(outCall.system.includes("The user's request that this reply answers") && outCall.system.includes('请帮我修复这封邮件'), 'reply translator sees the request');
+  assert.ok(outCall.system.includes('Deliverables stay in their own language'), 'deliverable rule in the default output prompt');
+  assert.equal(outCall.max_tokens, 65536, 'room for the translator to think');
+  console.log('ok 12  only Chinese translated; English lines and long pastes kept; reply translator gets the request');
+}
 
 // ---- /__zh/lookup: what /zh show asks for, both directions, from the cache
 const lk = await fetch(`http://127.0.0.1:${P.proxy}/__zh/lookup`, { method: 'POST', body: JSON.stringify({

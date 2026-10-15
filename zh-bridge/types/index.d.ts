@@ -31,6 +31,8 @@ declare module 'claude-code' {
       view: 'none' | 'settings' | 'show'
       history: ZhEntry[]
       showIndex: number
+      showLayout: 'side' | 'stacked'
+      showNotice: string | null
     }
   }
 }

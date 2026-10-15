@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 // Must match .claude-plugin/plugin.json: the plugin restarts an older running proxy.
-export const VERSION = '0.4.0';
+export const VERSION = '0.4.1';
 
 export const HOME_DIR = process.env.ZH_BRIDGE_HOME || path.join(os.homedir(), '.zh-bridge');
 export const CONFIG_PATH = path.join(HOME_DIR, 'config.json');
@@ -19,12 +19,14 @@ export const DEFAULTS = {
   target_lang: 'Simplified Chinese',
   port: 8787,
   upstream: 'https://api.anthropic.com',
-  max_input_chars: 12000,     // longer pasted blocks are passed through untranslated
+  max_input_chars: 12000,     // longer messages are passed through untranslated
+  paste_translate_max_chars: 300, // pasted text longer than this goes to Claude as it is
   translator: {
     base_url: 'https://api.deepseek.com', // any OpenAI-compatible endpoint
     model: 'deepseek-flash',
     api_key: '',
-    timeout_ms: 45000,
+    timeout_ms: 180000,       // the model thinks first (DeepSeek: on by default), give it time
+    max_tokens: 65536,        // room for thinking + the translation
     chunk_chars: 3000,
   },
 };

@@ -16,7 +16,7 @@ import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
 import { loadConfig, HOME_DIR, LOG_PATH, TYPED_PATH, VERSION } from './lib/config.mjs';
-import { translate, hasCJK, cjkRatio, keyOf, cacheGet, cacheSet } from './lib/translator.mjs';
+import { translate, translatablePart, hasCJK, cjkRatio, keyOf, cacheGet, cacheSet } from './lib/translator.mjs';
 
 fs.mkdirSync(HOME_DIR, { recursive: true });
 
@@ -85,6 +85,8 @@ function latestHumanPrompt(messages) {
 // arrives as a <command-args> block plus the command's own instructions with
 // that text pasted in. Only the person's text needs translating.
 const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;
+// The rest of a command's echo (<command-name>, <command-message>), not part of the request.
+const COMMAND_ARGS_WRAPPER = /<command-(?:name|message)>[\s\S]*?<\/command-(?:name|message)>/g;
 
 // The prompts the person typed recently, as the plugin records them (typed.json).
 // "Always" translates a reply only when it answers one of these, so Claude Code's
@@ -137,7 +139,10 @@ async function rewriteRequest(payload, cfg) {
   };
 
   const inJob = (text, apply) => {
-    if (!cfg.input || !isPromptText(text) || !hasCJK(text) || text.length > cfg.max_input_chars) return;
+    if (!cfg.input || !isPromptText(text) || !hasCJK(text)) return;
+    // Only the Chinese the person typed counts: long pastes and English lines are kept as they are.
+    const part = translatablePart(text, cfg);
+    if (!hasCJK(part) || part.length > cfg.max_input_chars) return;
     jobs.push(english(text).then((en) => { if (en !== null) { apply(en); changed = true; } }));
   };
 
@@ -178,7 +183,7 @@ async function rewriteRequest(payload, cfg) {
     }
   }
   await Promise.all(jobs);
-  return { changed, latestIsChinese, latestIsTyped };
+  return { changed, latest, latestIsChinese, latestIsTyped };
 }
 
 // ---------------------------------------------------------------- upstream
@@ -225,7 +230,7 @@ async function translateFinalText(blocks, cfg) {
   const out = new Map();
   await Promise.all(blocks.map(async (b) => {
     if (!b.text.trim()) return;
-    const zh = await translate(b.text, 'out', cfg);
+    const zh = await translate(b.text, 'out', cfg, cfg.request);
     out.set(b.index, zh);
     cacheSet(keyOf('out', zh.trim()), b.text); // so we can restore English next turn
   }));
@@ -396,13 +401,15 @@ const server = http.createServer(async (req, res) => {
     const isConversation = Array.isArray(payload.tools) && payload.tools.length > 0;
     if (!isConversation) return forwardRaw(req, res, body, cfg);
 
-    const { changed, latestIsChinese, latestIsTyped } = await rewriteRequest(payload, cfg);
+    const { changed, latest, latestIsChinese, latestIsTyped } = await rewriteRequest(payload, cfg);
     const outBody = changed ? Buffer.from(JSON.stringify(payload)) : body;
     const wantOut = isMessages && !isSubagent(payload) && (
       (cfg.output === 'auto' && latestIsChinese) ||
       (cfg.output === 'always' && latestIsTyped));
     if (!wantOut) return forwardRaw(req, res, outBody, cfg);
-    return forwardTranslated(req, res, outBody, cfg, payload.stream === true);
+    // The reply's translator sees what was asked (as typed), to keep English drafts English.
+    const request = (latest || '').replace(COMMAND_ARGS_WRAPPER, '').trim();
+    return forwardTranslated(req, res, outBody, { ...cfg, request }, payload.stream === true);
   } catch (e) {
     fail(res, e);
   }
